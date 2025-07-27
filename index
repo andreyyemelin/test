@@ -1,0 +1,647 @@
+import React, { useState, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, doc, setDoc, onSnapshot, collection } from 'firebase/firestore';
+
+// Firebase configuration (loaded from environment)
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+// Login Page Component
+const LoginPage = ({ onLoginSuccess }) => {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+
+  const handleLogin = () => {
+    // Simple login check (for demonstration only)
+    if (username === 'andreyy' && password === 'AN0725in') {
+      onLoginSuccess();
+    } else {
+      setError('שם משתמש או סיסמה שגויים.');
+    }
+  };
+
+  return (
+    <div
+      className="min-h-screen flex items-center justify-center p-4 bg-cover bg-center relative transition-opacity duration-700 ease-in-out opacity-100"
+      style={{ backgroundImage: "url('http://googleusercontent.com/file_content/1')" }}
+    >
+      {/* Dark semi-transparent overlay over the background */}
+      <div className="absolute inset-0 bg-black opacity-30"></div>
+      
+      {/* Top-left image */}
+      <img
+        src="http://googleusercontent.com/file_content/2"
+        alt="DRS RADA Technologies Logo.png"
+        className="absolute top-6 left-6 w-40 h-auto md:w-56 lg:w-72 z-50 rounded-lg shadow-xl border-2 border-white transition-transform duration-300 ease-in-out hover:scale-105"
+      />
+
+      <div className="bg-white bg-opacity-90 p-8 rounded-lg shadow-xl w-full max-w-md text-center backdrop-blur-sm relative z-10 transition-transform duration-500 ease-in-out hover:scale-[1.02]">
+        <h2 className="text-3xl font-bold mb-6 text-gray-800">התחברות</h2>
+        {error && <p className="text-red-500 mb-4">{error}</p>}
+        <div className="mb-4">
+          <input
+            type="text"
+            placeholder="שם משתמש"
+            className="w-full p-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-right transition duration-200 ease-in-out"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+          />
+        </div>
+        <div className="mb-6">
+          <input
+            type="password"
+            placeholder="סיסמה"
+            className="w-full p-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-right transition duration-200 ease-in-out"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+        </div>
+        <button
+          onClick={handleLogin}
+          className="w-full bg-blue-600 text-white py-3 rounded-md hover:bg-blue-700 transition duration-300 ease-in-out font-semibold text-lg shadow-md hover:shadow-lg"
+        >
+          התחבר
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// Work Schedule Page Component
+const WorkSchedulePage = ({ onLogout, db, auth, userId }) => {
+  // State for the selected date, initialized to null so no data is shown initially
+  const [selectedDate, setSelectedDate] = useState(null);
+  // State for schedule items
+  const [scheduleItems, setScheduleItems] = useState([]);
+  // State for new task input
+  const [newTask, setNewTask] = useState('');
+  // Loading state
+  const [loading, setLoading] = useState(false);
+  // State for the item currently being edited
+  const [editingItem, setEditingItem] = useState(null);
+  // States for the edited values in the modal
+  const [editedTime, setEditedTime] = useState('');
+  const [editedTask, setEditedTask] = useState('');
+  const [editedLocation, setEditedLocation] = useState('');
+  const [editedCategory, setEditedCategory] = useState(''); // New: Category
+  const [editedDescription, setEditedDescription] = useState(''); // New: Description
+  const [editedCompleted, setEditedCompleted] = useState(false); // New: Completed status
+  const [editedReminderTime, setEditedReminderTime] = useState(''); // New: Reminder time
+  const [editedRecurring, setEditedRecurring] = useState(false); // New: Recurring status
+
+  const [searchQuery, setSearchQuery] = useState(''); // New: Search query
+  const [currentView, setCurrentView] = useState('daily'); // New: Current view (daily, weekly, monthly)
+
+  // Reference date (July 27, 2025)
+  const referenceDate = new Date('2025-07-27T00:00:00');
+
+  // Function to format date for display
+  const formatDisplayDate = (date) => {
+    if (!date) return ''; // Return empty if no date selected
+    const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+    return date.toLocaleDateString('he-IL', options);
+  };
+
+  // Function to format date for input type="date"
+  const formatInputDate = (date) => {
+    if (!date) return ''; // Return empty if no date selected
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0'); // Months are 0-11
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  // Effect for loading schedule from Firestore
+  useEffect(() => {
+    if (!db || !userId || !selectedDate) {
+      setScheduleItems([]); // Clear schedule if no date or user
+      return;
+    }
+
+    setLoading(true);
+    const dateId = formatInputDate(selectedDate);
+    // Document path in Firestore: artifacts/{appId}/users/{userId}/dailySchedules/{dateId}
+    const scheduleDocRef = doc(db, `artifacts/${appId}/users/${userId}/dailySchedules`, dateId);
+
+    const unsubscribe = onSnapshot(scheduleDocRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setScheduleItems(data.items || []);
+      } else {
+        setScheduleItems([]); // No schedule for this date
+      }
+      setLoading(false);
+    }, (error) => {
+      console.error("Error fetching schedule: ", error);
+      setScheduleItems([]);
+      setLoading(false);
+    });
+
+    // Cleanup function for onSnapshot
+    return () => unsubscribe();
+  }, [db, userId, selectedDate]); // Dependencies: database, user ID, selected date
+
+  // Function to add a schedule item
+  const addScheduleItem = async () => {
+    if (!newTask.trim() || !selectedDate || !db || !userId) return;
+
+    const newTime = new Date().toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
+    const newItem = {
+      id: Date.now(), // Unique ID for the item
+      time: newTime,
+      task: newTask.trim(),
+      icon: '📝', // Default icon for new task
+      location: '',
+      category: 'כללי', // Default category
+      description: '',
+      completed: false,
+      reminderTime: '',
+      recurring: false,
+    };
+
+    const updatedItems = [...scheduleItems, newItem];
+    setScheduleItems(updatedItems); // Update state immediately (optimistic update)
+    setNewTask(''); // Clear input field
+
+    try {
+      const dateId = formatInputDate(selectedDate);
+      const scheduleDocRef = doc(db, `artifacts/${appId}/users/${userId}/dailySchedules`, dateId);
+      await setDoc(scheduleDocRef, { items: updatedItems }, { merge: true }); // Merge with existing document
+    } catch (error) {
+      console.error("Error adding schedule item: ", error);
+      // Revert state on error
+      setScheduleItems(scheduleItems);
+    }
+  };
+
+  // Function to delete a schedule item
+  const deleteScheduleItem = async (idToDelete) => {
+    if (!selectedDate || !db || !userId) return;
+
+    const filteredItems = scheduleItems.filter(item => item.id !== idToDelete);
+    setScheduleItems(filteredItems); // Update state immediately (optimistic update)
+
+    try {
+      const dateId = formatInputDate(selectedDate);
+      const scheduleDocRef = doc(db, `artifacts/${appId}/users/${userId}/dailySchedules`, dateId);
+      await setDoc(scheduleDocRef, { items: filteredItems }, { merge: true });
+    } catch (error) {
+      console.error("Error deleting schedule item: ", error);
+      // Revert state on error
+      setScheduleItems(scheduleItems);
+    }
+  };
+
+  // Function to open the edit modal
+  const openEditModal = (item) => {
+    setEditingItem(item);
+    setEditedTime(item.time);
+    setEditedTask(item.task);
+    setEditedLocation(item.location || '');
+    setEditedCategory(item.category || 'כללי');
+    setEditedDescription(item.description || '');
+    setEditedCompleted(item.completed || false);
+    setEditedReminderTime(item.reminderTime || '');
+    setEditedRecurring(item.recurring || false);
+  };
+
+  // Function to save edited item
+  const handleEditSave = async () => {
+    if (!editingItem || !db || !userId || !selectedDate) return;
+
+    const updatedItems = scheduleItems.map(item =>
+      item.id === editingItem.id
+        ? {
+            ...item,
+            time: editedTime,
+            task: editedTask,
+            location: editedLocation,
+            category: editedCategory,
+            description: editedDescription,
+            completed: editedCompleted,
+            reminderTime: editedReminderTime,
+            recurring: editedRecurring,
+          }
+        : item
+    );
+    setScheduleItems(updatedItems); // Optimistic update
+    setEditingItem(null); // Close modal
+
+    try {
+      const dateId = formatInputDate(selectedDate);
+      const scheduleDocRef = doc(db, `artifacts/${appId}/users/${userId}/dailySchedules`, dateId);
+      await setDoc(scheduleDocRef, { items: updatedItems }, { merge: true });
+    } catch (error) {
+      console.error("Error saving edited item: ", error);
+      // Revert state on error
+      setScheduleItems(scheduleItems);
+    }
+  };
+
+  // Function to cancel editing
+  const handleEditCancel = () => {
+    setEditingItem(null);
+  };
+
+  // Function to toggle completed status directly from the list
+  const toggleCompleted = async (idToToggle) => {
+    if (!selectedDate || !db || !userId) return;
+
+    const updatedItems = scheduleItems.map(item =>
+      item.id === idToToggle ? { ...item, completed: !item.completed } : item
+    );
+    setScheduleItems(updatedItems); // Optimistic update
+
+    try {
+      const dateId = formatInputDate(selectedDate);
+      const scheduleDocRef = doc(db, `artifacts/${appId}/users/${userId}/dailySchedules`, dateId);
+      await setDoc(scheduleDocRef, { items: updatedItems }, { merge: true });
+    } catch (error) {
+      console.error("Error toggling completed status: ", error);
+      setScheduleItems(scheduleItems); // Revert on error
+    }
+  };
+
+  // Filtered schedule items based on search query
+  const filteredScheduleItems = scheduleItems.filter(item =>
+    item.task.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    item.location.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    item.category.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    item.description.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  // Check if the selected date is before the reference date
+  const isDateBeforeReference = selectedDate && selectedDate < referenceDate;
+
+  const categories = ['כללי', 'פגישה', 'פיתוח', 'שיווק', 'מנהלה', 'אחר'];
+
+  return (
+    <div className="min-h-screen flex flex-col items-center bg-gradient-to-br from-blue-50 to-indigo-100 p-4 font-sans transition-opacity duration-700 ease-in-out opacity-100">
+      <div className="bg-white p-8 rounded-xl shadow-2xl w-full max-w-2xl text-center mt-12 transform transition-all duration-300 hover:scale-[1.01]">
+        <h2 className="text-4xl font-extrabold mb-4 text-gray-800">לוז עבודה</h2>
+        
+        {/* View selection buttons */}
+        <div className="flex justify-center mb-6 space-x-2 rtl:space-x-reverse">
+          <button
+            onClick={() => setCurrentView('daily')}
+            className={`py-2 px-4 rounded-full text-sm font-semibold transition-all duration-300 ${
+              currentView === 'daily' ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            }`}
+          >
+            תצוגה יומית
+          </button>
+          <button
+            onClick={() => setCurrentView('weekly')}
+            className={`py-2 px-4 rounded-full text-sm font-semibold transition-all duration-300 ${
+              currentView === 'weekly' ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            }`}
+          >
+            תצוגה שבועית
+          </button>
+          <button
+            onClick={() => setCurrentView('monthly')}
+            className={`py-2 px-4 rounded-full text-sm font-semibold transition-all duration-300 ${
+              currentView === 'monthly' ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            }`}
+          >
+            תצוגה חודשית
+          </button>
+        </div>
+
+        {/* Date picker */}
+        <div className="mb-6">
+          <label htmlFor="date-picker" className="block text-gray-700 text-lg font-semibold mb-2">
+            בחר תאריך:
+          </label>
+          <input
+            type="date"
+            id="date-picker"
+            className="p-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-center text-lg transition duration-200 ease-in-out"
+            value={selectedDate ? formatInputDate(selectedDate) : ''}
+            onChange={(e) => setSelectedDate(new Date(e.target.value))}
+          />
+        </div>
+
+        {/* Display User ID and explanation */}
+        {userId && (
+          <div className="bg-blue-50 border-l-4 border-blue-500 text-blue-700 p-4 mb-6 text-right rounded-md shadow-sm">
+            <p className="font-bold mb-1">שמירת נתונים:</p>
+            <p className="text-sm">
+              הלוז שלך נשמר בענן תחת מזהה המשתמש הייחודי הבא:
+              <br />
+              <span className="font-mono text-xs font-semibold text-gray-800 break-all">{userId}</span>
+            </p>
+            <p className="text-xs mt-2">
+              נתונים אלו יהיו זמינים כל עוד תתחבר עם אותו מזהה משתמש.
+              <br/>
+              (ביישום מלא, אימות משתמשים עם מייל וסיסמה מבטיח מזהה עקבי בכל המכשירים).
+            </p>
+          </div>
+        )}
+
+        {currentView === 'daily' && selectedDate ? (
+          <>
+            <p className="text-xl text-gray-600 mb-10 border-b-2 border-blue-200 pb-4 inline-block px-4 transition-colors duration-300 ease-in-out">
+              {formatDisplayDate(selectedDate)}
+            </p>
+
+            {isDateBeforeReference ? (
+              <div className="text-red-500 text-4xl font-bold my-10 animate-pulse transition-opacity duration-500 ease-in-out">
+                לתאריך שבחרת לא נמצאו נתונים
+              </div>
+            ) : (
+              <>
+                {/* Search input */}
+                <div className="mb-6">
+                  <input
+                    type="text"
+                    placeholder="חפש משימה, מיקום או קטגוריה..."
+                    className="w-full p-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-right transition duration-200 ease-in-out"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                  />
+                </div>
+
+                {loading ? (
+                  <div className="text-blue-600 text-2xl my-10">טוען לוז...</div>
+                ) : (
+                  <>
+                    {filteredScheduleItems.length > 0 ? (
+                      <div className="space-y-6 mb-10 transition-opacity duration-500 ease-in-out">
+                        {filteredScheduleItems.map((item) => (
+                          <div
+                            key={item.id}
+                            className={`flex items-center justify-between bg-white p-5 rounded-lg shadow-md border border-blue-100
+                                       hover:shadow-lg hover:border-blue-300 transition duration-300 ease-in-out cursor-pointer hover:scale-[1.01]
+                                       ${item.completed ? 'opacity-60 line-through bg-green-50' : ''}`} // Strikethrough for completed tasks
+                          >
+                            <div className="flex items-center">
+                              <input
+                                type="checkbox"
+                                checked={item.completed}
+                                onChange={(e) => { e.stopPropagation(); toggleCompleted(item.id); }}
+                                className="form-checkbox h-5 w-5 text-blue-600 rounded mr-2"
+                              />
+                              <span className="text-3xl mr-4">{item.icon}</span>
+                              <div className="text-right">
+                                <span className="text-gray-900 font-bold text-xl block">{item.time}</span>
+                                {item.reminderTime && <span className="text-xs text-gray-500 block mt-1">תזכורת: {item.reminderTime}</span>}
+                              </div>
+                            </div>
+                            <div className="text-right flex-grow px-4" onClick={() => openEditModal(item)}>
+                               <span className="text-gray-700 text-lg block font-semibold">{item.task}</span>
+                               {item.location && <span className="text-sm text-gray-500 block">מיקום: {item.location}</span>}
+                               {item.category && <span className="text-xs text-gray-400 block">קטגוריה: {item.category}</span>}
+                               {item.description && <p className="text-xs text-gray-600 mt-1 truncate max-w-[200px] mx-auto">{item.description}</p>}
+                            </div>
+                            <button
+                               onClick={(e) => { e.stopPropagation(); deleteScheduleItem(item.id); }}
+                               className="ml-4 text-red-500 hover:text-red-700 transition duration-200 ease-in-out"
+                               title="מחק משימה"
+                             >
+                               <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                               </svg>
+                             </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-gray-500 text-2xl my-10 transition-opacity duration-500 ease-in-out">
+                        אין משימות לתאריך זה או לחיפוש שלך. הוסף משימה חדשה!
+                      </div>
+                    )}
+
+                    {/* Input for adding new task */}
+                    <div className="flex justify-center items-center mb-10">
+                      <input
+                        type="text"
+                        placeholder="הוסף משימה חדשה..."
+                        className="p-3 border border-gray-300 rounded-l-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-right flex-grow max-w-xs"
+                        value={newTask}
+                        onChange={(e) => setNewTask(e.target.value)}
+                        onKeyPress={(e) => { if (e.key === 'Enter') addScheduleItem(); }}
+                      />
+                      <button
+                        onClick={addScheduleItem}
+                        className="bg-green-500 text-white py-3 px-6 rounded-r-md hover:bg-green-600 transition duration-300 ease-in-out font-semibold shadow-md"
+                      >
+                        הוסף
+                      </button>
+                    </div>
+                  </>
+                )}
+              </>
+            )}
+          </>
+        ) : currentView === 'weekly' ? (
+          <div className="text-gray-700 text-2xl my-10 p-4 bg-yellow-50 rounded-lg shadow-md">
+            <p className="font-bold mb-2">תצוגה שבועית (לצורך הדגמה בלבד)</p>
+            <p>כאן תוצג תצוגה מקיפה של הלוז השבועי שלך.</p>
+            <p className="text-sm mt-2">ביישום מלא, זה יכלול סיכום משימות לפי ימים בשבוע.</p>
+          </div>
+        ) : currentView === 'monthly' ? (
+          <div className="text-gray-700 text-2xl my-10 p-4 bg-purple-50 rounded-lg shadow-md">
+            <p className="font-bold mb-2">תצוגה חודשית (לצורך הדגמה בלבד)</p>
+            <p>כאן תוצג תצוגת לוח שנה של הלוז החודשי שלך.</p>
+            <p className="text-sm mt-2">ביישום מלא, זה יכלול אירועים ומשימות על גבי לוח שנה אינטראקטיבי.</p>
+          </div>
+        ) : (
+          <div className="text-gray-500 text-2xl my-10 transition-opacity duration-500 ease-in-out">
+            בחר תאריך כדי לראות את לוז העבודה
+          </div>
+        )}
+
+        <button
+          onClick={onLogout}
+          className="bg-red-500 text-white py-3 px-8 rounded-full hover:bg-red-600 transition duration-300 ease-in-out
+                     font-semibold text-lg shadow-lg hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-red-400 focus:ring-opacity-75"
+        >
+          התנתק
+        </button>
+      </div>
+
+      {/* Edit Modal */}
+      {editingItem && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white p-8 rounded-lg shadow-2xl w-full max-w-md text-center transform transition-all duration-300 scale-100 opacity-100">
+            <h3 className="text-2xl font-bold mb-6 text-gray-800">ערוך משימה</h3>
+            <div className="mb-4 text-right">
+              <label htmlFor="edit-time" className="block text-gray-700 text-sm font-semibold mb-1">זמן:</label>
+              <input
+                type="time"
+                id="edit-time"
+                className="w-full p-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-right"
+                value={editedTime}
+                onChange={(e) => setEditedTime(e.target.value)}
+              />
+            </div>
+            <div className="mb-4 text-right">
+              <label htmlFor="edit-task" className="block text-gray-700 text-sm font-semibold mb-1">משימה:</label>
+              <input
+                type="text"
+                id="edit-task"
+                className="w-full p-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-right"
+                value={editedTask}
+                onChange={(e) => setEditedTask(e.target.value)}
+              />
+            </div>
+            <div className="mb-4 text-right">
+              <label htmlFor="edit-location" className="block text-gray-700 text-sm font-semibold mb-1">מיקום:</label>
+              <input
+                type="text"
+                id="edit-location"
+                placeholder="הכנס מיקום (אופציונלי)"
+                className="w-full p-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-right"
+                value={editedLocation}
+                onChange={(e) => setEditedLocation(e.target.value)}
+              />
+            </div>
+            <div className="mb-4 text-right">
+              <label htmlFor="edit-category" className="block text-gray-700 text-sm font-semibold mb-1">קטגוריה:</label>
+              <select
+                id="edit-category"
+                className="w-full p-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-right"
+                value={editedCategory}
+                onChange={(e) => setEditedCategory(e.target.value)}
+              >
+                {categories.map(cat => (
+                  <option key={cat} value={cat}>{cat}</option>
+                ))}
+              </select>
+            </div>
+            <div className="mb-4 text-right">
+              <label htmlFor="edit-description" className="block text-gray-700 text-sm font-semibold mb-1">תיאור:</label>
+              <textarea
+                id="edit-description"
+                placeholder="הוסף תיאור מפורט למשימה (אופציונלי)"
+                className="w-full p-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-right resize-y"
+                rows="3"
+                value={editedDescription}
+                onChange={(e) => setEditedDescription(e.target.value)}
+              ></textarea>
+            </div>
+            <div className="mb-4 text-right">
+              <label htmlFor="edit-reminder-time" className="block text-gray-700 text-sm font-semibold mb-1">זמן תזכורת (אופציונלי):</label>
+              <input
+                type="time"
+                id="edit-reminder-time"
+                className="w-full p-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-right"
+                value={editedReminderTime}
+                onChange={(e) => setEditedReminderTime(e.target.value)}
+              />
+            </div>
+            <div className="mb-6 flex items-center justify-end">
+              <label htmlFor="edit-completed" className="text-gray-700 text-sm font-semibold ml-2">הושלם:</label>
+              <input
+                type="checkbox"
+                id="edit-completed"
+                className="form-checkbox h-5 w-5 text-blue-600 rounded"
+                checked={editedCompleted}
+                onChange={(e) => setEditedCompleted(e.target.checked)}
+              />
+            </div>
+            <div className="mb-6 flex items-center justify-end">
+              <label htmlFor="edit-recurring" className="text-gray-700 text-sm font-semibold ml-2">משימה חוזרת (לצורך הדגמה):</label>
+              <input
+                type="checkbox"
+                id="edit-recurring"
+                className="form-checkbox h-5 w-5 text-blue-600 rounded"
+                checked={editedRecurring}
+                onChange={(e) => setEditedRecurring(e.target.checked)}
+              />
+            </div>
+            <div className="flex justify-around">
+              <button
+                onClick={handleEditSave}
+                className="bg-blue-600 text-white py-2 px-6 rounded-md hover:bg-blue-700 transition duration-300 ease-in-out font-semibold shadow-md"
+              >
+                שמור שינויים
+              </button>
+              <button
+                onClick={handleEditCancel}
+                className="bg-gray-400 text-white py-2 px-6 rounded-md hover:bg-gray-500 transition duration-300 ease-in-out font-semibold shadow-md"
+              >
+                בטל
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Main App Component
+const App = () => {
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [db, setDb] = useState(null);
+  const [auth, setAuth] = useState(null);
+  const [userId, setUserId] = useState(null);
+  const [firebaseInitialized, setFirebaseInitialized] = useState(false);
+
+  useEffect(() => {
+    // Initialize Firebase
+    const app = initializeApp(firebaseConfig);
+    const firestore = getFirestore(app);
+    const authInstance = getAuth(app);
+
+    setDb(firestore);
+    setAuth(authInstance);
+
+    // Listen for auth state changes
+    const unsubscribe = onAuthStateChanged(authInstance, async (user) => {
+      if (user) {
+        setUserId(user.uid);
+      } else {
+        // If no user, try to sign in with custom token or anonymously
+        try {
+          if (initialAuthToken) {
+            await signInWithCustomToken(authInstance, initialAuthToken);
+          } else {
+            await signInAnonymously(authInstance);
+          }
+          setUserId(authInstance.currentUser?.uid || crypto.randomUUID()); // Set userId even if anonymous
+        } catch (error) {
+          console.error("Firebase auth error:", error);
+          setUserId(crypto.randomUUID()); // Fallback to random ID on auth error
+        }
+      }
+      setFirebaseInitialized(true); // Mark Firebase as initialized
+    });
+
+    return () => unsubscribe(); // Cleanup on component unmount
+  }, []);
+
+  const handleLoginSuccess = () => {
+    setIsLoggedIn(true);
+  };
+
+  const handleLogout = () => {
+    setIsLoggedIn(false);
+    // Optionally, sign out from Firebase here
+  };
+
+  if (!firebaseInitialized) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-100">
+        <div className="text-blue-600 text-3xl font-bold">טוען את האפליקציה...</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="font-sans">
+      {isLoggedIn && db && auth && userId ? (
+        <WorkSchedulePage onLogout={handleLogout} db={db} auth={auth} userId={userId} />
+      ) : (
+        <LoginPage onLoginSuccess={handleLoginSuccess} />
+      )}
+    </div>
+  );
+};
+
+export default App;
